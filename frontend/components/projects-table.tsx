@@ -20,17 +20,17 @@ export function ProjectsTable({
       <table className="w-full min-w-[860px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="px-4 py-3 font-medium">Project</th>
-            <th className="px-4 py-3 font-medium">Project ID</th>
-            <th className="px-4 py-3 font-medium">Agency</th>
-            <th className="px-4 py-3 font-medium">State</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Project</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Project ID</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Agency</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">State</th>
             {showLatestReport ? (
-              <th className="px-4 py-3 font-medium">Latest Report</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">Latest Report</th>
             ) : null}
-            <th className="px-4 py-3 font-medium">Risk Score</th>
-            <th className="px-4 py-3 font-medium">Risk Level</th>
-            <th className="px-4 py-3 font-medium">Delay Prob.</th>
-            <th className="px-4 py-3 text-right font-medium">Action</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Risk Score</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Risk Level</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium">Delay Prob.</th>
+            <th className="whitespace-nowrap px-4 py-3 text-right font-medium">Action</th>
           </tr>
         </thead>
         <tbody>

@@ -360,25 +360,25 @@ export default function DataIngestionPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="px-5 py-3 font-medium">
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Report
                   </th>
-                  <th className="px-5 py-3 font-medium">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Month
                   </th>
-                  <th className="px-5 py-3 font-medium">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Records
                   </th>
-                  <th className="px-5 py-3 font-medium">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Status
                   </th>
-                  <th className="px-5 py-3 font-medium">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Uploaded
                   </th>
-                  <th className="px-5 py-3 font-medium">
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">
                     Action
                   </th>
                 </tr>
@@ -511,41 +511,32 @@ export default function DataIngestionPage() {
 
           {/* Records */}
           <div className="overflow-x-auto">
-
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[700px] text-sm">
               <thead>
-                <tr className="border-b border-border bg-muted/20 text-left text-xs text-muted-foreground">
-
-                  <th className="px-4 py-3 font-medium">
+                <tr className="border-b border-border bg-muted/20 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     Project ID
                   </th>
-
-                  <th className="px-4 py-3 font-medium">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     Project
                   </th>
-
-                  <th className="px-4 py-3 font-medium">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     Agency
                   </th>
-
-                  <th className="px-4 py-3 font-medium">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     State
                   </th>
-
-                  <th className="px-4 py-3 font-medium">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     Progress
                   </th>
-
-                  <th className="px-4 py-3 font-medium">
+                  <th className="whitespace-nowrap px-4 py-3 font-medium">
                     Delay
                   </th>
-
                   {selectedRun.status === 'DRAFT' && (
-                    <th className="px-4 py-3 font-medium">
+                    <th className="whitespace-nowrap px-4 py-3 font-medium">
                       Action
                     </th>
                   )}
-
                 </tr>
               </thead>
 
