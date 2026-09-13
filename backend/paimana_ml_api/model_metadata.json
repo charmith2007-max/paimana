@@ -1,0 +1,81 @@
+{
+  "features": [
+    "agency",
+    "state",
+    "delay_reason_category",
+    "original_cost",
+    "revised_cost",
+    "anticipated_cost",
+    "expenditure",
+    "physical_progress",
+    "time_overrun",
+    "cost_overrun",
+    "is_delayed",
+    "additional_delay_flag",
+    "additional_delay_months",
+    "is_derived_delay_label",
+    "months_since_previous_report",
+    "schedule_shift_since_previous_month",
+    "anticipated_cost_change_pct",
+    "expenditure_change",
+    "physical_progress_change",
+    "months_to_anticipated_completion",
+    "months_original_schedule_slippage",
+    "current_cost_overrun_pct",
+    "expenditure_vs_anticipated_cost_pct",
+    "project_observation_number",
+    "prior_report_count"
+  ],
+  "categorical_features": [
+    "agency",
+    "state",
+    "delay_reason_category"
+  ],
+  "numeric_features": [
+    "original_cost",
+    "revised_cost",
+    "anticipated_cost",
+    "expenditure",
+    "physical_progress",
+    "time_overrun",
+    "cost_overrun",
+    "is_delayed",
+    "additional_delay_flag",
+    "additional_delay_months",
+    "is_derived_delay_label",
+    "months_since_previous_report",
+    "schedule_shift_since_previous_month",
+    "anticipated_cost_change_pct",
+    "expenditure_change",
+    "physical_progress_change",
+    "months_to_anticipated_completion",
+    "months_original_schedule_slippage",
+    "current_cost_overrun_pct",
+    "expenditure_vs_anticipated_cost_pct",
+    "project_observation_number",
+    "prior_report_count"
+  ],
+  "target": "target_next_month_additional_delay",
+  "model": "RandomForestClassifier(n_estimators=250,min_samples_leaf=3,class_weight='balanced_subsample',random_state=42)",
+  "sklearn_version": "1.9.0",
+  "metrics": {
+    "validation": {
+      "n": 539,
+      "roc_auc": 0.8099290780141845,
+      "pr_auc": 0.4373161812825429
+    },
+    "test": {
+      "n": 430,
+      "roc_auc": 0.783396759386402,
+      "pr_auc": 0.4031704755203842
+    }
+  },
+  "risk_thresholds": {
+    "low_lt": 30,
+    "medium_lte": 60,
+    "high_gt": 60
+  },
+  "training_scope": "Reports through Sep 2024",
+  "validation_scope": "Oct 2024 predicting Nov 2024",
+  "test_scope": "Nov 2024 predicting Dec 2024"
+}
