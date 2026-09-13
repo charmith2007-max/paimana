@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   CheckCircle2,
   FileUp,
@@ -10,6 +10,7 @@ import {
   Trash2,
   AlertCircle,
   ArrowRight,
+  X,
 } from 'lucide-react'
 import {
   approveIngestion,
@@ -31,11 +32,14 @@ export default function DataIngestionPage() {
 
   const [loading, setLoading] = useState(false)
   const [loadingRuns, setLoadingRuns] = useState(true)
+  const [loadingReviewId, setLoadingReviewId] = useState<number | null>(null)
   const [approving, setApproving] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  const reviewRef = useRef<HTMLDivElement>(null)
 
   async function loadRuns() {
     try {
@@ -100,18 +104,26 @@ export default function DataIngestionPage() {
 
   async function openRun(runId: number) {
     try {
+      setLoadingReviewId(runId)
       setError('')
 
       const response = await getIngestionRun(runId, 100, 0)
 
       setSelectedRun(response.run)
       setRecords(response.records || [])
+
+      // Scroll smoothly to the review interface
+      setTimeout(() => {
+        reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 50)
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : 'Failed to load the ingestion draft.',
       )
+    } finally {
+      setLoadingReviewId(null)
     }
   }
 
@@ -385,42 +397,61 @@ export default function DataIngestionPage() {
               </thead>
 
               <tbody>
-                {runs.map((run) => (
-                  <tr
-                    key={run.id}
-                    className="border-b border-border last:border-0 hover:bg-muted/30"
-                  >
-                    <td className="max-w-[280px] truncate px-5 py-3 font-medium">
-                      {run.filename}
-                    </td>
+                {runs.map((run) => {
+                  const isSelected = selectedRun?.id === run.id
+                  const isLoadingThis = loadingReviewId === run.id
+                  return (
+                    <tr
+                      key={run.id}
+                      className={`border-b border-border last:border-0 transition-colors ${
+                        isSelected
+                          ? 'bg-primary/10 border-l-2 border-l-primary'
+                          : 'hover:bg-muted/30'
+                      }`}
+                    >
+                      <td className="max-w-[280px] truncate px-5 py-3 font-medium">
+                        {run.filename}
+                      </td>
 
-                    <td className="px-5 py-3">
-                      {run.report_month}
-                    </td>
+                      <td className="px-5 py-3">
+                        {run.report_month}
+                      </td>
 
-                    <td className="px-5 py-3 tabular-nums">
-                      {run.row_count ?? run.accepted_rows ?? 0}
-                    </td>
+                      <td className="px-5 py-3 tabular-nums">
+                        {run.row_count ?? run.accepted_rows ?? 0}
+                      </td>
 
-                    <td className="px-5 py-3">
-                      <StatusBadge status={run.status} />
-                    </td>
+                      <td className="px-5 py-3">
+                        <StatusBadge status={run.status} />
+                      </td>
 
-                    <td className="whitespace-nowrap px-5 py-3 text-muted-foreground">
-                      {formatDate(run.uploaded_at)}
-                    </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-muted-foreground">
+                        {formatDate(run.uploaded_at)}
+                      </td>
 
-                    <td className="px-5 py-3">
-                      <button
-                        onClick={() => openRun(run.id)}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                      >
-                        Review
-                        <ArrowRight className="size-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      <td className="px-5 py-3">
+                        <button
+                          type="button"
+                          onClick={() => openRun(run.id)}
+                          disabled={isLoadingThis}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+                        >
+                          {isLoadingThis ? (
+                            <>
+                              <Loader2 className="size-3.5 animate-spin" />
+                              Loading...
+                            </>
+                          ) : (
+                            <>
+                              {isSelected ? 'Viewing' : 'Review'}
+                              <ArrowRight className="size-3.5" />
+                            </>
+                          )}
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -429,7 +460,7 @@ export default function DataIngestionPage() {
 
       {/* Review */}
       {selectedRun && (
-        <Card>
+        <Card ref={reviewRef} id="officer-review-section" className="border-primary/40 shadow-sm">
           <div className="border-b border-border p-5">
 
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -452,25 +483,41 @@ export default function DataIngestionPage() {
                 </p>
               </div>
 
-              {selectedRun.status === 'DRAFT' && (
+              <div className="flex items-center gap-2">
+                {selectedRun.status === 'DRAFT' && (
+                  <button
+                    type="button"
+                    onClick={handleApprove}
+                    disabled={approving || records.length === 0}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {approving ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Running Agent 2...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="size-4" />
+                        Approve & Run ML
+                      </>
+                    )}
+                  </button>
+                )}
+
                 <button
-                  onClick={handleApprove}
-                  disabled={approving || records.length === 0}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  type="button"
+                  onClick={() => {
+                    setSelectedRun(null)
+                    setRecords([])
+                  }}
+                  className="inline-flex h-9 items-center justify-center gap-1 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title="Close Review"
                 >
-                  {approving ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Running Agent 2...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="size-4" />
-                      Approve & Run ML
-                    </>
-                  )}
+                  <X className="size-3.5" />
+                  Close
                 </button>
-              )}
+              </div>
             </div>
 
             {selectedRun.notes && (
@@ -484,8 +531,12 @@ export default function DataIngestionPage() {
           <div className="grid grid-cols-2 gap-3 border-b border-border p-5 md:grid-cols-4">
 
             <SummaryItem
-              label="Extracted Records"
-              value={records.length}
+              label="Showing"
+              value={
+                (selectedRun.row_count ?? selectedRun.accepted_rows ?? 0) > records.length
+                  ? `${records.length} of ${(selectedRun.row_count ?? selectedRun.accepted_rows ?? 0).toLocaleString('en-IN')} records`
+                  : `${records.length} records`
+              }
             />
 
             <SummaryItem

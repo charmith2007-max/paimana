@@ -745,9 +745,10 @@ async def agent_ingest(
                 "No project records could be extracted."
             )
 
-        # Insert extracted rows into staging.
-        supabase.table("ingestion_records").insert(
-            [
+        # Insert extracted rows into staging in batches.
+        batch_size = 500
+        for i in range(0, len(rows), batch_size):
+            batch = [
                 {
                     key: value
                     for key, value in row.items()
@@ -756,9 +757,9 @@ async def agent_ingest(
                 | {
                     "ingestion_run_id": run["id"]
                 }
-                for row in rows
+                for row in rows[i:i + batch_size]
             ]
-        ).execute()
+            supabase.table("ingestion_records").insert(batch).execute()
 
         # Update DRAFT summary.
         supabase.table("ingestion_runs").update({
@@ -1220,6 +1221,25 @@ def approve_ingestion(ingestion_run_id: int):
 
     # 3. Move the draft into production through PostgreSQL.
     try:
+        # First ensure all project identities from this ingestion run exist in projects table
+        projects_dict = {}
+        for record in records:
+            pid = str(record.get("project_id", "")).strip()
+            if pid and pid not in projects_dict:
+                projects_dict[pid] = {
+                    "project_id": pid,
+                    "project_name": record.get("project_name") or "",
+                    "agency": record.get("agency") or "",
+                    "state": record.get("state") or "",
+                }
+
+        distinct_projects = list(projects_dict.values())
+        for i in range(0, len(distinct_projects), 500):
+            supabase.table("projects").upsert(
+                distinct_projects[i:i + 500],
+                on_conflict="project_id",
+            ).execute()
+
         rpc_response = supabase.rpc(
             "approve_ingestion_transaction",
             {"p_ingestion_run_id": ingestion_run_id},
@@ -1748,12 +1768,10 @@ def approve_ingestion(ingestion_run_id: int):
 @app.get("/agent/risk")
 def get_agent_risk():
     try:
-        # Latest allowed reporting month
+        # Latest reporting month
         latest = (
             supabase.table("project_risk")
             .select("report_month")
-            .gte("report_month", "2023-01-01")
-            .lte("report_month", "2024-12-01")
             .order("report_month", desc=True)
             .limit(1)
             .execute()
@@ -1762,7 +1780,7 @@ def get_agent_risk():
         if not latest.data:
             raise HTTPException(
                 status_code=404,
-                detail="No risk data found for 2023-2024"
+                detail="No risk data found."
             )
 
         report_month = latest.data[0]["report_month"]
@@ -1839,12 +1857,10 @@ def get_agent_risk():
 @app.get("/agent/risk/summary")
 def get_risk_summary():
     try:
-        # Find latest reporting month within allowed period
+        # Find latest reporting month
         latest = (
             supabase.table("project_risk")
             .select("report_month")
-            .gte("report_month", "2023-01-01")
-            .lte("report_month", "2024-12-01")
             .order("report_month", desc=True)
             .limit(1)
             .execute()
@@ -1853,7 +1869,7 @@ def get_risk_summary():
         if not latest.data:
             raise HTTPException(
                 status_code=404,
-                detail="No risk data found for 2023-2024"
+                detail="No risk data found."
             )
 
         report_month = latest.data[0]["report_month"]
@@ -1895,12 +1911,26 @@ def get_risk_summary():
             if str(row.get("risk_level", "")).lower() == "low"
         )
 
+        # Compute portfolio metrics across project_months
+        pm_rows = fetch_all("project_months", "project_id,report_month")
+        if pm_rows:
+            pm_df = pd.DataFrame(pm_rows)
+            pm_df["project_id"] = pm_df["project_id"].astype(str)
+            earliest = pm_df.groupby("project_id")["report_month"].min()
+            total_projects = int(len(earliest))
+            new_projects = int((earliest == report_month).sum())
+        else:
+            total_projects = total
+            new_projects = 0
+
         return {
             "report_month": report_month,
             "total": total,
             "high": high,
             "medium": medium,
-            "low": low
+            "low": low,
+            "total_projects": total_projects,
+            "new_projects": new_projects,
         }
 
     except HTTPException:

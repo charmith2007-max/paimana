@@ -25,6 +25,8 @@ export type RiskSummaryResponse = {
   high: number
   medium: number
   low: number
+  total_projects?: number
+  new_projects?: number
 }
 
 export type AgentRiskRecord = {

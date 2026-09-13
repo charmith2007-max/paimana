@@ -14,7 +14,7 @@ export function RiskScore({
   return (
     <div className={cn('flex items-center gap-2.5', className)}>
       <span className={cn('w-8 text-sm font-semibold tabular-nums', RISK_TEXT_CLASS[level])}>
-        {score}
+        {Number(score).toFixed(1)}
       </span>
       <div
         className="h-1.5 w-16 overflow-hidden rounded-full bg-muted"

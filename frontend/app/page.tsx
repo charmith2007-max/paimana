@@ -43,11 +43,10 @@ export default async function OverviewPage() {
       }
     }
     const uniqueProjects = Array.from(uniqueProjectMap.values())
-    const totalProjects = uniqueProjects.length
+    const totalProjects = summary.total_projects ?? uniqueProjects.length
 
     // 2. New Projects: Projects first observed in the latest reporting batch
-    // (Evaluated dynamically; 0 in established historical cohort baseline)
-    const newProjectsCount = 0
+    const newProjectsCount = summary.new_projects ?? 0
 
     // 3. Priority Projects: High-Risk projects from the latest approved Agent 2 reporting period
     const latestRisks = riskPayload.data ?? []
@@ -236,7 +235,7 @@ export default async function OverviewPage() {
                           </p>
                         </div>
                         <span className="hidden text-sm font-semibold tabular-nums text-foreground sm:inline">
-                          Score: {p.risk_score}
+                          Score: {Number(p.risk_score).toFixed(1)}
                         </span>
                         <RiskBadge level={p.risk_level} />
                       </Link>

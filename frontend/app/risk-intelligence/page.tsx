@@ -92,7 +92,11 @@ export default async function RiskIntelligencePage() {
             <CardHeader>
               <CardTitle>Risk Distribution</CardTitle>
               <CardDescription>
-                December 2024 predicted risk levels
+                {new Date(summary.report_month).toLocaleDateString('en-IN', {
+                  month: 'long',
+                  year: 'numeric',
+                })}{' '}
+                predicted risk levels
               </CardDescription>
             </CardHeader>
 
