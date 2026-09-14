@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import type { ProjectSummary, RiskLevel } from '@/lib/types'
+import { deduplicateProjectsByLatestReport } from '@/lib/mappers'
 import { cn } from '@/lib/utils'
 import { ProjectsTable } from '@/components/projects-table'
 import { Card } from '@/components/ui/card'
@@ -52,9 +53,13 @@ export function ProjectsExplorer({
   const [agency, setAgency] = useState('All')
   const [risk, setRisk] = useState('All')
 
+  const uniqueProjects = useMemo(() => {
+    return deduplicateProjectsByLatestReport(projects)
+  }, [projects])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return projects.filter((p) => {
+    return uniqueProjects.filter((p) => {
       if (state !== 'All' && p.state !== state) return false
       if (agency !== 'All' && p.agency !== agency) return false
       if (risk !== 'All' && p.risk_level !== risk) return false
@@ -64,7 +69,7 @@ export function ProjectsExplorer({
       }
       return true
     })
-  }, [projects, query, state, agency, risk])
+  }, [uniqueProjects, query, state, agency, risk])
 
   const hasFilters = query || state !== 'All' || agency !== 'All' || risk !== 'All'
 
@@ -106,7 +111,7 @@ export function ProjectsExplorer({
           <p className="text-xs text-muted-foreground">
             Showing{' '}
             <span className="font-semibold text-foreground">{filtered.length}</span> of{' '}
-            {projects.length} projects
+            {uniqueProjects.length} projects
           </p>
           <button
             type="button"

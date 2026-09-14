@@ -85,6 +85,9 @@ class Agent3UpdateAgent:
         prev = sorted_records[-2]
         prev_month = str(prev.get("report_month") or "")
 
+        source_rep = current.get("source_report")
+        source_pg = current.get("source_page")
+
         changes: list[dict[str, Any]] = []
 
         # 1. Schedule Shift
@@ -106,6 +109,8 @@ class Agent3UpdateAgent:
                     "delta": f"{abs(months_shift)} month{'s' if abs(months_shift) != 1 else ''} {'later' if months_shift > 0 else 'earlier'}",
                     "direction": direction,
                     "severity": severity,
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # 2. Time Overrun Delta
@@ -122,6 +127,8 @@ class Agent3UpdateAgent:
                     "delta": f"{'+' if time_diff > 0 else ''}{int(time_diff)} mo",
                     "direction": "worsened" if time_diff > 0 else "improved",
                     "severity": "Medium" if time_diff > 0 else "Low",
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # 3. Anticipated Cost Movement
@@ -141,6 +148,8 @@ class Agent3UpdateAgent:
                     "delta": f"{'+' if cost_diff > 0 else ''}₹{cost_diff:,.2f} Cr ({pct:+.1f}%)",
                     "direction": direction,
                     "severity": severity,
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # 4. Expenditure Delta
@@ -157,6 +166,8 @@ class Agent3UpdateAgent:
                     "delta": f"+₹{exp_diff:,.2f} Cr" if exp_diff > 0 else f"-₹{abs(exp_diff):,.2f} Cr",
                     "direction": "neutral",
                     "severity": "Low",
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # 5. Physical Progress Movement
@@ -175,6 +186,8 @@ class Agent3UpdateAgent:
                     "delta": f"{prog_diff:+.1f}%",
                     "direction": direction,
                     "severity": severity,
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
             elif curr_prog < 100:
                 # Progress stalled
@@ -186,6 +199,8 @@ class Agent3UpdateAgent:
                     "delta": "0.0% (Stalled)",
                     "direction": "worsened",
                     "severity": "Medium",
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # 6. Risk Score & Level Shift
@@ -215,6 +230,8 @@ class Agent3UpdateAgent:
                     "delta": f"{score_diff:+.1f} pts ({prev_level} → {curr_level})",
                     "direction": direction,
                     "severity": severity,
+                    "source_report": source_rep,
+                    "source_page": source_pg,
                 })
 
         # Build human-readable summary

@@ -175,3 +175,23 @@ export function uniqueSorted(values: string[]): string[] {
     a.localeCompare(b),
   )
 }
+
+export function deduplicateProjectsByLatestReport(
+  projects: ProjectSummary[],
+): ProjectSummary[] {
+  const map = new Map<string, ProjectSummary>()
+  for (const project of projects) {
+    const existing = map.get(project.project_id)
+    if (!existing) {
+      map.set(project.project_id, project)
+    } else {
+      const existingDate = existing.latest_report ?? ''
+      const currentDate = project.latest_report ?? ''
+      if (currentDate > existingDate) {
+        map.set(project.project_id, project)
+      }
+    }
+  }
+  return Array.from(map.values())
+}
+

@@ -29,6 +29,16 @@ CANONICAL_COLUMNS = [
     "source_page",
 ]
 
+INDIAN_STATES = [
+    "ANDAMAN AND NICOBAR ISLANDS", "ANDHRA PRADESH", "ARUNACHAL PRADESH", "ASSAM",
+    "BIHAR", "CHANDIGARH", "CHHATTISGARH", "CHHATISGARH", "DADRA AND NAGAR HAVELI", "DAMAN AND DIU",
+    "DELHI", "GOA", "GUJARAT", "HARYANA", "HIMACHAL PRADESH", "JAMMU AND KASHMIR",
+    "JHARKHAND", "KARNATAKA", "KERALA", "LADAKH", "LAKSHADWEEP", "MADHYA PRADESH",
+    "MAHARASHTRA", "MANIPUR", "MEGHALAYA", "MIZORAM", "NAGALAND", "ODISHA",
+    "PUDUCHERRY", "PUNJAB", "RAJASTHAN", "SIKKIM", "TAMIL NADU", "TELANGANA",
+    "TRIPURA", "UTTAR PRADESH", "UTTARAKHAND", "WEST BENGAL", "MULTI STATE", "MULTI-STATE"
+]
+
 
 class IngestionAgent:
     """
@@ -122,23 +132,28 @@ class IngestionAgent:
     def extract_project_id(self, text: str):
         """
         Preserve the original project ID exactly.
-        Supports IDs with or without N prefix.
+        Supports IDs with or without delimiters/prefixes.
         """
-
         if not text:
             return None
+
+        match = re.search(r"[\[\(]([A-Za-z]?\d{6,9})[\]\)]", str(text))
+        if match:
+            return match.group(1)
 
         patterns = [
             r"\bN\d{8}\b",
             r"\bN\d{9}\b",
             r"\b\d{9}\b",
             r"\b\d{8}\b",
+            r"\b[A-Za-z]\d{6,9}\b",
+            r"\b\d{6,9}\b",
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, str(text), re.IGNORECASE)
-            if match:
-                return match.group(0)
+            m = re.search(pattern, str(text), re.IGNORECASE)
+            if m:
+                return m.group(0)
 
         return None
 
@@ -148,12 +163,10 @@ class IngestionAgent:
 
         value = str(value).strip()
 
-        if not value or value.upper() in {"N.A.", "NA", "N/A", "-"}:
+        if not value or value.upper() in {"N.A.", "NA", "N/A", "-", "N.A", "NIL"}:
             return None
 
-        value = value.replace(",", "")
-        value = value.replace("₹", "")
-        value = value.strip()
+        value = value.replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "").strip()
 
         try:
             return float(value)
@@ -166,16 +179,17 @@ class IngestionAgent:
 
         value = str(value).strip()
 
-        if not value or value.upper() in {"N.A.", "NA", "N/A", "-"}:
+        if not value or value.upper() in {"N.A.", "NA", "N/A", "-", "N.A", "NIL", "0/0", "00/0000"}:
             return None
 
-        # MM/YYYY
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return value
+
         match = re.fullmatch(r"(\d{1,2})/(\d{4})", value)
         if match:
             month, year = match.groups()
             return f"{year}-{int(month):02d}-01"
 
-        # Month-YY
         try:
             parsed = pd.to_datetime(value, errors="coerce")
             if pd.notna(parsed):
@@ -184,6 +198,151 @@ class IngestionAgent:
             pass
 
         return None
+
+    def parse_dates_from_cell(self, value):
+        """
+        Format-agnostic date parsing from multi-value cells.
+        Supports {Anticipated}, [Anticipated], (Revised), and bare Original dates.
+        """
+        text = str(value or "").replace("\n", " ").strip()
+        if not text or text.upper() in {"-", "N.A.", "NA", "N/A", "NIL", "0/0"}:
+            return None, None, None
+
+        ant_match = re.search(r"[\{\[](\d{1,2})[/-](\d{2,4})[\}\]]", text)
+        rev_match = re.search(r"\(([A-Za-z]{3}|\d{1,2})[/-](\d{2,4})\)", text)
+        all_dates = re.findall(r"\b(0?[1-9]|1[0-2])[/-](20\d{2}|\d{2})\b", text)
+
+        def normalize_date(m, y):
+            y_int = int(y)
+            if y_int < 100:
+                y_int = 2000 + y_int
+            m_int = int(m)
+            return f"{y_int:04d}-{m_int:02d}-01"
+
+        orig_date = None
+        if all_dates:
+            orig_date = normalize_date(all_dates[0][0], all_dates[0][1])
+
+        ant_date = None
+        if ant_match:
+            ant_date = normalize_date(ant_match.group(1), ant_match.group(2))
+        elif len(all_dates) >= 2:
+            ant_date = normalize_date(all_dates[-1][0], all_dates[-1][1])
+
+        rev_date = None
+        if rev_match:
+            try:
+                m_str, y_str = rev_match.group(1), rev_match.group(2)
+                y_int = int(y_str) if len(y_str) == 4 else (2000 + int(y_str))
+                if m_str.isdigit():
+                    rev_date = f"{y_int:04d}-{int(m_str):02d}-01"
+                else:
+                    dt = pd.to_datetime(f"{m_str}-{y_int}", format="%b-%Y", errors="coerce")
+                    if pd.notna(dt):
+                        rev_date = dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
+        return orig_date, rev_date, ant_date
+
+    def parse_costs_from_cell(self, value):
+        """
+        Format-agnostic cost parsing from multi-value cells.
+        Supports {Anticipated}, [Anticipated], (Revised), and bare Original costs.
+        """
+        text = str(value or "").replace("\n", " ").replace(",", "").replace("₹", "").strip()
+        if not text or text.upper() in {"-", "N.A.", "NA", "N/A", "NIL"}:
+            return None, None, None
+
+        ant_match = re.search(r"[\{\[]([\d.]+)[\}\]]", text)
+        rev_match = re.search(r"\(([\d.]+)\)", text)
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+
+        orig_cost = float(numbers[0]) if numbers else None
+        rev_cost = float(rev_match.group(1)) if rev_match else None
+        ant_cost = float(ant_match.group(1)) if ant_match else None
+
+        if ant_cost is None:
+            if len(numbers) >= 3:
+                ant_cost = float(numbers[2])
+            elif len(numbers) >= 2:
+                ant_cost = float(numbers[1])
+            else:
+                ant_cost = orig_cost
+
+        if rev_cost is None and len(numbers) >= 2:
+            rev_cost = float(numbers[1])
+
+        return orig_cost, rev_cost, ant_cost
+
+    def parse_project_block(self, cell):
+        """
+        Format-agnostic project metadata parsing.
+        Supports both inline comma formats:
+          'NAME - [CODE],AGENCY,STATE'
+        and multiline parentheses formats:
+          'NAME\n(AGENCY)\n(CODE)\n(STATE)'
+        """
+        text = str(cell or "").strip()
+        if not text:
+            return None, None, None, None
+
+        code_matches = re.findall(r"[\[\(]([A-Za-z]?\d{6,9})[\]\)]", text)
+        if not code_matches:
+            code_matches = re.findall(r"\b([A-Za-z]\d{8,9})\b", text)
+        if not code_matches:
+            code_matches = re.findall(r"\b(\d{8,9})\b", text)
+
+        if not code_matches:
+            return None, None, None, None
+
+        project_id = code_matches[0]
+        state_in_cell = None
+        agency = None
+
+        if " - [" in text or " - (" in text or (" - " in text and "," in text):
+            parts = text.split(" - ")
+            project_name = parts[0].replace("\n", " ").strip()
+            meta_part = parts[-1]
+            for item in meta_part.split(","):
+                it = item.strip()
+                it_clean = re.sub(r"[\[\]\(\)]", "", it).strip()
+                if it_clean.upper() in INDIAN_STATES:
+                    state_in_cell = it_clean.upper()
+                elif not re.search(r"\d{6,9}", it_clean) and not agency and 2 <= len(it_clean) <= 30:
+                    agency = it_clean
+        else:
+            for st in INDIAN_STATES:
+                if f"({st})" in text.upper() or f"[{st}]" in text.upper():
+                    state_in_cell = st
+                    break
+
+            agency_matches = re.findall(r"[\(\[]( [A-Za-z\s/&-]{2,25} )[\)\]]".replace(" ", ""), text)
+            for a in agency_matches:
+                a_clean = a.strip()
+                if (
+                    a_clean.upper() not in {"N.A.", "NA"}
+                    and not re.match(r"^[A-Za-z]?\d+$", a_clean)
+                    and a_clean.upper() not in INDIAN_STATES
+                ):
+                    agency = a_clean
+                    break
+
+            lines = [str(x or "").replace("\n", " ").strip() for x in text.split("\n") if str(x or "").strip()]
+            name_lines = []
+            for l in lines:
+                if not re.fullmatch(r"[\(\[].*?[\)\]]", l) and project_id not in l:
+                    cleaned_line = l
+                    for st in INDIAN_STATES:
+                        cleaned_line = re.sub(rf"[\(\[]{st}[\)\]]", "", cleaned_line, flags=re.IGNORECASE).strip()
+                    if cleaned_line:
+                        name_lines.append(cleaned_line)
+
+            project_name = " ".join(name_lines).strip()
+            if not project_name and lines:
+                project_name = lines[0]
+
+        return project_id, project_name, agency, state_in_cell
 
     def validate_row(self, row):
         errors = []
@@ -207,7 +366,6 @@ class IngestionAgent:
 
     def validate_duplicates(self, rows):
         seen = set()
-
         valid = []
 
         for row in rows:
@@ -230,21 +388,17 @@ class IngestionAgent:
 
     def process_rows(self, rows):
         """
-        Validate and normalize extracted rows.
+        Validate and normalize extracted rows into canonical schema.
         """
-
         self.accepted_rows = []
         self.quarantined_rows = []
 
         for row in rows:
-
-            # Guarantee canonical schema
             normalized = {
                 column: row.get(column)
                 for column in CANONICAL_COLUMNS
             }
 
-            # Normalize numeric fields
             for column in [
                 "original_cost",
                 "revised_cost",
@@ -259,7 +413,6 @@ class IngestionAgent:
                     normalized[column]
                 )
 
-            # Normalize dates
             for column in [
                 "original_completion",
                 "revised_completion",
@@ -289,7 +442,6 @@ class IngestionAgent:
         """
         Save accepted rows as ML-ready CSV.
         """
-
         df = pd.DataFrame(
             rows,
             columns=CANONICAL_COLUMNS,
@@ -318,239 +470,93 @@ class IngestionAgent:
             "schema_columns": len(CANONICAL_COLUMNS),
         }
 
-
-    def run_ingestion(rows, output_path):
+    def run_ingestion(self, rows, output_path):
         """
         Simple entry point for the backend/API.
         """
+        accepted = self.process_rows(rows)
 
-        agent = IngestionAgent()
-
-        accepted = agent.process_rows(rows)
-
-        dataset = agent.build_dataset(
+        dataset = self.build_dataset(
             accepted,
             output_path,
         )
 
         return {
-            "report": agent.generate_report(),
+            "report": self.generate_report(),
             "dataset": dataset,
-            "quarantined": agent.quarantined_rows,
+            "quarantined": self.quarantined_rows,
         }
+
     def identify_project_tables(self, pdf_path):
-            """
-            Discover tables that look like PAIMANA project tables.
-            """
-
-            candidates = []
-
-            project_keywords = [
-                "project name",
-                "project code",
-                "agency",
-                "cost",
-                "expenditure",
-                "commissioning",
-                "physical progress",
-                "state",
-            ]
-
-            with pdfplumber.open(pdf_path) as pdf:
-
-                for page_number, page in enumerate(
-                    pdf.pages,
-                    start=1
-                ):
-
-                    tables = page.extract_tables()
-
-                    for table_number, table in enumerate(
-                        tables,
-                        start=1
-                    ):
-
-                        if not table:
-                            continue
-
-                        # Convert the table to searchable text.
-                        text = " ".join(
-                            str(cell or "")
-                            for row in table
-                            for cell in row
-                        ).lower()
-
-                        matches = [
-                            keyword
-                            for keyword in project_keywords
-                            if keyword in text
-                        ]
-
-                        # A project table should contain
-                        # several of these signals.
-                        if len(matches) >= 3:
-                            candidates.append({
-                                "page": page_number,
-                                "table": table_number,
-                                "matched_keywords": matches,
-                                "score": len(matches),
-                            })
-
-            candidates.sort(
-                key=lambda x: x["score"],
-                reverse=True
-            )
-
-            return candidates
-    def extract_project_rows(self, pdf_path, report_month, source_report):
         """
-        Schema-aware PAIMANA extraction.
-
-        Recognizes project tables dynamically across all MoSPI Flash Report formats:
-        - Format A: Dedicated PROJECT ID, PROJECT NAME, COST, EXPENDITURE, PROGRESS columns.
-        - Format B / Standard: Ongoing project tables with embedded (Agency) (Project Code),
-          state carry-forward, multi-value date/cost columns, and sector categorization.
-
-        Sector/category summary tables (e.g. Project Counts by Sector) are explicitly skipped.
+        Discover tables that look like PAIMANA project tables.
         """
-
-        INDIAN_STATES = [
-            "ANDAMAN AND NICOBAR ISLANDS", "ANDHRA PRADESH", "ARUNACHAL PRADESH", "ASSAM",
-            "BIHAR", "CHANDIGARH", "CHHATTISGARH", "DADRA AND NAGAR HAVELI", "DAMAN AND DIU",
-            "DELHI", "GOA", "GUJARAT", "HARYANA", "HIMACHAL PRADESH", "JAMMU AND KASHMIR",
-            "JHARKHAND", "KARNATAKA", "KERALA", "LADAKH", "LAKSHADWEEP", "MADHYA PRADESH",
-            "MAHARASHTRA", "MANIPUR", "MEGHALAYA", "MIZORAM", "NAGALAND", "ODISHA",
-            "PUDUCHERRY", "PUNJAB", "RAJASTHAN", "SIKKIM", "TAMIL NADU", "TELANGANA",
-            "TRIPURA", "UTTAR PRADESH", "UTTARAKHAND", "WEST BENGAL", "MULTI STATE", "MULTI-STATE"
+        candidates = []
+        project_keywords = [
+            "project name",
+            "project code",
+            "agency",
+            "cost",
+            "expenditure",
+            "commissioning",
+            "physical progress",
+            "state",
         ]
 
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_number, page in enumerate(pdf.pages, start=1):
+                tables = page.extract_tables() or []
+                for table_number, table in enumerate(tables, start=1):
+                    if not table:
+                        continue
+
+                    text = " ".join(
+                        str(cell or "")
+                        for row in table
+                        for cell in row
+                    ).lower()
+
+                    matches = [
+                        keyword
+                        for keyword in project_keywords
+                        if keyword in text
+                    ]
+
+                    if len(matches) >= 3:
+                        candidates.append({
+                            "page": page_number,
+                            "table": table_number,
+                            "matched_keywords": matches,
+                            "score": len(matches),
+                        })
+
+        candidates.sort(
+            key=lambda x: x["score"],
+            reverse=True
+        )
+
+        return candidates
+
+    def extract_project_rows(self, pdf_path, report_month, source_report):
+        """
+        Format-agnostic PAIMANA semantic extraction.
+
+        Discovers project tables dynamically across all MoSPI Flash Report formats:
+        - Scored Semantic Header Discovery: Discovers table column roles and preserves
+          active column mappings across unrepeated continuation pages.
+        - Unified Entity Parsing: Normalizes project ID, agency, state from multi-style notations.
+        - Metric & Date Normalization: Handles {Anticipated}, [Anticipated], (Revised), and bare tokens.
+        - Canonical Assembly: Assembles strictly typed canonical schema matching CANONICAL_COLUMNS.
+        """
         rows = []
         current_state = ""
         current_sector = ""
+        active_col_map = None
 
         def clean(value):
             if value is None:
                 return ""
             return str(value).replace("\n", " ").strip()
-
-        def parse_number(value):
-            value = clean(value)
-            if not value or value.upper() in {"-", "N.A.", "NA", "N/A"}:
-                return None
-            value = value.replace(",", "").replace("₹", "").strip()
-            try:
-                return float(value)
-            except ValueError:
-                return None
-
-        def parse_dates_from_cell(value):
-            text = clean(value)
-            if not text or text.upper() in {"-", "N.A.", "NA", "N/A"}:
-                return None, None, None
-
-            ant_match = re.search(r"\{(\d{1,2})[/-](\d{4})\}", text)
-            rev_match = re.search(r"\(([A-Za-z]{3}|\d{1,2})[/-](\d{2,4})\)", text)
-            all_dates = re.findall(r"\b(0?[1-9]|1[0-2])[/-](20\d{2})\b", text)
-
-            orig_date = None
-            if all_dates:
-                orig_date = f"{int(all_dates[0][1]):04d}-{int(all_dates[0][0]):02d}-01"
-
-            ant_date = None
-            if ant_match:
-                ant_date = f"{int(ant_match.group(2)):04d}-{int(ant_match.group(1)):02d}-01"
-            elif len(all_dates) >= 2:
-                ant_date = f"{int(all_dates[-1][1]):04d}-{int(all_dates[-1][0]):02d}-01"
-
-            rev_date = None
-            if rev_match:
-                try:
-                    m_str, y_str = rev_match.group(1), rev_match.group(2)
-                    if len(y_str) == 2:
-                        y_str = f"20{y_str}"
-                    if m_str.isdigit():
-                        rev_date = f"{int(y_str):04d}-{int(m_str):02d}-01"
-                    else:
-                        dt = pd.to_datetime(f"{m_str}-{y_str}", format="%b-%Y", errors="coerce")
-                        if pd.notna(dt):
-                            rev_date = dt.strftime("%Y-%m-%d")
-                except Exception:
-                    pass
-
-            return orig_date, rev_date, ant_date
-
-        def parse_costs_from_cell(value):
-            text = clean(value).replace(",", "")
-            if not text or text.upper() in {"-", "N.A.", "NA", "N/A"}:
-                return None, None, None
-
-            ant_match = re.search(r"\{([\d.]+)\}", text)
-            rev_match = re.search(r"\(([\d.]+)\)", text)
-            numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
-
-            orig_cost = float(numbers[0]) if numbers else None
-            rev_cost = float(rev_match.group(1)) if rev_match else None
-            ant_cost = float(ant_match.group(1)) if ant_match else None
-
-            if ant_cost is None:
-                if len(numbers) >= 3:
-                    ant_cost = float(numbers[2])
-                elif len(numbers) >= 2:
-                    ant_cost = float(numbers[1])
-                else:
-                    ant_cost = orig_cost
-
-            if rev_cost is None and len(numbers) >= 2:
-                rev_cost = float(numbers[1])
-
-            return orig_cost, rev_cost, ant_cost
-
-        def parse_project_block(cell):
-            text = clean(cell)
-            code_matches = re.findall(r"\(([A-Za-z]?\d{6,9})\)", str(cell))
-            if not code_matches:
-                code_matches = re.findall(r"\b([A-Za-z]\d{8,9})\b", str(cell))
-            if not code_matches:
-                code_matches = re.findall(r"\b(\d{8,9})\b", str(cell))
-
-            if not code_matches:
-                return None, None, None, None
-
-            project_id = code_matches[0]
-
-            state_in_cell = None
-            for st in INDIAN_STATES:
-                if f"({st})" in str(cell).upper():
-                    state_in_cell = st
-                    break
-
-            agency_matches = re.findall(r"\(([A-Za-z\s/&-]{2,25})\)", str(cell))
-            agency = None
-            for a in agency_matches:
-                a_clean = a.strip()
-                if (
-                    a_clean.upper() not in {"N.A.", "NA"}
-                    and not re.match(r"^[A-Za-z]?\d+$", a_clean)
-                    and a_clean.upper() not in INDIAN_STATES
-                ):
-                    agency = a_clean
-                    break
-
-            lines = [clean(x) for x in str(cell).split("\n") if clean(x)]
-            name_lines = []
-            for l in lines:
-                if not re.fullmatch(r"\(.*?\)", l) and project_id not in l:
-                    cleaned_line = l
-                    for st in INDIAN_STATES:
-                        cleaned_line = re.sub(rf"\({st}\)", "", cleaned_line, flags=re.IGNORECASE).strip()
-                    if cleaned_line:
-                        name_lines.append(cleaned_line)
-
-            project_name = " ".join(name_lines).strip()
-            if not project_name and lines:
-                project_name = lines[0]
-
-            return project_id, project_name, agency, state_in_cell
 
         with pdfplumber.open(pdf_path) as pdf:
             for page_number, page in enumerate(pdf.pages, start=1):
@@ -559,115 +565,121 @@ class IngestionAgent:
                     continue
 
                 for table in tables:
-                    if not table or len(table) < 2:
+                    if not table or len(table) < 1:
                         continue
 
-                    header_cells = [clean(x).lower() for x in table[0]]
-                    header_str = " | ".join(header_cells)
+                    best_header_row_idx = None
+                    best_header_col_map = None
+                    best_score = 0
 
-                    # Skip sector/state macro summary tables
-                    if "sector name" in header_str and "project count" in header_str:
+                    for r_idx in range(min(3, len(table))):
+                        row_cells = [clean(x).lower() for x in table[r_idx]]
+                        hdr_str = " | ".join(row_cells)
+
+                        if "sector name" in hdr_str and "project count" in hdr_str:
+                            continue
+                        if hdr_str.startswith("sl. no. | sector | projects") or hdr_str.startswith("sl. no. | state | projects"):
+                            continue
+                        if "list of completed projects" in hdr_str or "list of deleted projects" in hdr_str:
+                            active_col_map = None
+                            break
+
+                        col_map = {}
+                        score = 0
+                        for idx, h in enumerate(row_cells):
+                            if "project id" in h:
+                                col_map["project_id"] = idx
+                                score += 2
+                            elif "project name" in h or h == "project" or "project" in h:
+                                col_map["project_cell"] = idx
+                                score += 2
+                            if "state" in h:
+                                col_map["state"] = idx
+                                score += 1
+                            if "sector" in h:
+                                col_map["sector"] = idx
+                                score += 1
+                            if "approval" in h:
+                                col_map["approval"] = idx
+                                score += 1
+                            if "commissioning" in h or "completion" in h or "doc" in h:
+                                col_map["doc"] = idx
+                                score += 1
+                            if "cost" in h and "revised" not in h and "cumulative" not in h:
+                                col_map["cost"] = idx
+                                score += 1
+                            if "revised cost" in h:
+                                col_map["revised_cost"] = idx
+                                score += 1
+                            if "original cost" in h:
+                                col_map["original_cost"] = idx
+                                score += 1
+                            if "expenditure" in h:
+                                col_map["expenditure"] = idx
+                                score += 1
+                            if "progress" in h:
+                                col_map["progress"] = idx
+                                score += 1
+
+                        if ("project_id" in col_map or "project_cell" in col_map) and score >= 3:
+                            if score > best_score:
+                                best_score = score
+                                best_header_row_idx = r_idx
+                                best_header_col_map = col_map
+
+                    if best_header_col_map is not None:
+                        active_col_map = best_header_col_map
+                        table_data_rows = table[best_header_row_idx + 1:]
+                    elif active_col_map and len(table[0]) >= 4:
+                        table_data_rows = table
+                    else:
                         continue
-                    if header_str.startswith("sl. no. | sector | projects") or header_str.startswith("sl. no. | state | projects"):
-                        continue
 
-                    has_proj = any(k in header_str for k in ["project id", "project name", "project code", "project"])
-                    has_metric = any(k in header_str for k in ["cost", "expenditure", "progress", "commissioning", "approval"])
-
-                    if not (has_proj and has_metric):
-                        continue
-
-                    # Dynamic header-to-column index mapping
-                    col_map = {}
-                    for idx, h in enumerate(header_cells):
-                        if "project id" in h:
-                            col_map["project_id"] = idx
-                        elif "project name" in h or "project" in h:
-                            col_map["project_cell"] = idx
-                        if "state" in h:
-                            col_map["state"] = idx
-                        if "sector" in h:
-                            col_map["sector"] = idx
-                        if "sl" in h or "s.no" in h or "sno" in h:
-                            col_map["sno"] = idx
-                        if "approval" in h:
-                            col_map["approval"] = idx
-                        if "commissioning" in h or "completion" in h or "doc" in h:
-                            col_map["doc"] = idx
-                        if "cost" in h and "revised" not in h and "cumulative" not in h:
-                            col_map["cost"] = idx
-                        if "revised cost" in h:
-                            col_map["revised_cost"] = idx
-                        if "original cost" in h:
-                            col_map["original_cost"] = idx
-                        if "expenditure" in h:
-                            col_map["expenditure"] = idx
-                        if "progress" in h:
-                            col_map["progress"] = idx
-
-                    for row in table[1:]:
+                    for row in table_data_rows:
                         if not row or len(row) < 3:
                             continue
 
-                        # Update state from cell if present
-                        if "state" in col_map and row[col_map["state"]]:
-                            st_val = clean(row[col_map["state"]]).upper()
-                            for st in INDIAN_STATES:
-                                if st in st_val:
-                                    current_state = st
-                                    break
+                        if len(row) > 1 and row[1]:
+                            cell1_clean = clean(row[1]).upper()
+                            if cell1_clean in INDIAN_STATES:
+                                current_state = cell1_clean
+                                continue
+                            elif len(clean(row[1])) > 3 and not any(c.isdigit() for c in clean(row[1])) and all(not row[i] for i in range(2, len(row))):
+                                current_sector = clean(row[1])
+                                continue
 
-                        # Update sector from cell if present
-                        if "sector" in col_map and row[col_map["sector"]]:
-                            sec_val = clean(row[col_map["sector"]])
-                            if sec_val and not re.match(r"^\d+$", sec_val):
-                                current_sector = sec_val
-
-                        # Extract project ID and name
                         project_id = None
                         project_name = ""
                         agency = None
                         state_in_cell = None
 
-                        if "project_id" in col_map and row[col_map["project_id"]]:
-                            pid = clean(row[col_map["project_id"]])
-                            if re.fullmatch(r"[A-Za-z]?\d{6,9}", pid):
-                                project_id = pid
-                                if "project_cell" in col_map:
-                                    project_name = clean(row[col_map["project_cell"]])
-
-                        if not project_id and "project_cell" in col_map:
-                            pid, pname, ag, st_cell = parse_project_block(row[col_map["project_cell"]])
+                        proj_cell_idx = active_col_map.get("project_cell", 1)
+                        if proj_cell_idx < len(row) and row[proj_cell_idx]:
+                            pid, pname, ag, st_cell = self.parse_project_block(row[proj_cell_idx])
                             if pid:
                                 project_id = pid
                                 project_name = pname
                                 agency = ag
                                 state_in_cell = st_cell
 
-                        if not project_id or not project_name:
+                        if not project_id:
                             continue
 
-                        # Determine State
-                        state = state_in_cell or current_state
-                        if not state:
-                            state = "CENTRAL / MULTI-STATE"
-
-                        # Determine Agency
+                        state = state_in_cell or current_state or "CENTRAL / MULTI-STATE"
                         if not agency:
                             agency = current_sector or "Central Sector"
 
-                        # Costs
                         original_cost = None
                         revised_cost = None
                         anticipated_cost = None
 
-                        if "original_cost" in col_map and row[col_map["original_cost"]]:
-                            original_cost = parse_number(row[col_map["original_cost"]])
-                        if "revised_cost" in col_map and row[col_map["revised_cost"]]:
-                            revised_cost = parse_number(row[col_map["revised_cost"]])
+                        if "original_cost" in active_col_map and active_col_map["original_cost"] < len(row) and row[active_col_map["original_cost"]]:
+                            original_cost = self.clean_number(row[active_col_map["original_cost"]])
+                        if "revised_cost" in active_col_map and active_col_map["revised_cost"] < len(row) and row[active_col_map["revised_cost"]]:
+                            revised_cost = self.clean_number(row[active_col_map["revised_cost"]])
                             anticipated_cost = revised_cost
-                        if "cost" in col_map and row[col_map["cost"]]:
-                            oc, rc, ac = parse_costs_from_cell(row[col_map["cost"]])
+                        if "cost" in active_col_map and active_col_map["cost"] < len(row) and row[active_col_map["cost"]]:
+                            oc, rc, ac = self.parse_costs_from_cell(row[active_col_map["cost"]])
                             if original_cost is None:
                                 original_cost = oc
                             if revised_cost is None:
@@ -678,22 +690,22 @@ class IngestionAgent:
                         if anticipated_cost is None:
                             anticipated_cost = revised_cost or original_cost
 
-                        # Expenditure
                         expenditure = None
-                        if "expenditure" in col_map and row[col_map["expenditure"]]:
-                            expenditure = parse_number(row[col_map["expenditure"]])
+                        if "expenditure" in active_col_map and active_col_map["expenditure"] < len(row) and row[active_col_map["expenditure"]]:
+                            exp_val = clean(row[active_col_map["expenditure"]])
+                            nums = re.findall(r"[\d,]+(?:\.\d+)?", exp_val)
+                            if nums:
+                                expenditure = self.clean_number(nums[0])
 
-                        # Physical Progress
                         physical_progress = None
-                        if "progress" in col_map and row[col_map["progress"]]:
-                            physical_progress = parse_number(row[col_map["progress"]])
+                        if "progress" in active_col_map and active_col_map["progress"] < len(row) and row[active_col_map["progress"]]:
+                            physical_progress = self.clean_number(row[active_col_map["progress"]])
 
-                        # Dates
                         original_completion = None
                         revised_completion = None
                         anticipated_completion = None
-                        if "doc" in col_map and row[col_map["doc"]]:
-                            oc_d, rc_d, ac_d = parse_dates_from_cell(row[col_map["doc"]])
+                        if "doc" in active_col_map and active_col_map["doc"] < len(row) and row[active_col_map["doc"]]:
+                            oc_d, rc_d, ac_d = self.parse_dates_from_cell(row[active_col_map["doc"]])
                             original_completion = oc_d
                             revised_completion = rc_d
                             anticipated_completion = ac_d or revised_completion or original_completion
@@ -732,9 +744,9 @@ class IngestionAgent:
                         })
 
         unique = {}
-        for row in rows:
-            key = (row["project_id"], row["report_month"])
-            unique[key] = row
+        for r in rows:
+            key = (r["project_id"], r["report_month"])
+            unique[key] = r
 
         return list(unique.values())
 

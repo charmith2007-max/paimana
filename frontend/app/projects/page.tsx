@@ -1,5 +1,9 @@
 import { ApiError, getProjects } from '@/lib/api'
-import { mapProjectSummary, uniqueSorted } from '@/lib/mappers'
+import {
+  deduplicateProjectsByLatestReport,
+  mapProjectSummary,
+  uniqueSorted,
+} from '@/lib/mappers'
 import { PageHeader } from '@/components/page-header'
 import { LastUpdated } from '@/components/last-updated'
 import { ProjectsExplorer } from '@/components/projects-explorer'
@@ -10,7 +14,8 @@ export const dynamic = 'force-dynamic'
 export default async function ProjectsPage() {
   try {
     const payload = await getProjects(2000)
-    const projects = payload.projects.map(mapProjectSummary)
+    const rawProjects = payload.projects.map(mapProjectSummary)
+    const projects = deduplicateProjectsByLatestReport(rawProjects)
     const states = uniqueSorted(projects.map((p) => p.state))
     const agencies = uniqueSorted(projects.map((p) => p.agency))
 

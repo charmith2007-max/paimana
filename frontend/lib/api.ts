@@ -52,12 +52,10 @@ export type AgentRiskResponse = {
 function getApiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '')
 
-  if (typeof window !== 'undefined') {
-    // Same-origin rewrite in next.config.mjs avoids browser CORS issues.
-    return '/paimana-api'
-  }
-
   if (!configured) {
+    if (typeof window !== 'undefined') {
+      return 'http://127.0.0.1:8000'
+    }
     throw new ApiError(
       'NEXT_PUBLIC_API_URL is not set. Add it to .env.local.',
     )

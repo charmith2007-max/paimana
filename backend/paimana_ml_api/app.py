@@ -1,8 +1,11 @@
+import time
 from pathlib import Path
 from typing import Any
 import json
 import os
 
+import httpx
+import httpcore
 import joblib
 import numpy as np
 import pandas as pd
@@ -11,11 +14,41 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
+import postgrest._sync.request_builder as postgrest_rb
 from agents.ingestion_agent import IngestionAgent
 from agents.ml_agent import MLAgent
 from agents.agent3 import Agent3UpdateAgent
 from agents.agent4 import Agent4PrescriptionAgent
+
+# ============================================================
+# RESILIENT SUPABASE HTTP WRAPPER (TRANSIENT NETWORK RETRIES)
+# ============================================================
+
+TRANSIENT_NETWORK_ERRORS = (
+    httpx.TransportError,
+    httpcore.NetworkError,
+    httpcore.TimeoutException,
+    httpcore.ProtocolError,
+    ConnectionError,
+    OSError,
+)
+
+_original_send_with_retry = postgrest_rb.send_with_retry
+
+def _resilient_send_with_retry(req: postgrest_rb.ReqConfig):
+    max_retries = 2
+    attempt = 0
+    while True:
+        try:
+            return _original_send_with_retry(req)
+        except TRANSIENT_NETWORK_ERRORS as exc:
+            attempt += 1
+            if attempt > max_retries:
+                raise
+            time.sleep(0.25 * (2 ** (attempt - 1)))
+
+postgrest_rb.send_with_retry = _resilient_send_with_retry
 
 # ============================================================
 # CONFIGURATION
@@ -33,9 +66,24 @@ if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
         "SUPABASE_URL and SUPABASE_SECRET_KEY must be set in .env"
     )
 
+_supabase_transport = httpx.HTTPTransport(
+    retries=2,
+    http2=False,  # HTTP/1.1 avoids Windows multiplexed stream socket reset issues
+    limits=httpx.Limits(max_connections=50, max_keepalive_connections=10, keepalive_expiry=15.0),
+)
+_supabase_httpx_client = httpx.Client(
+    transport=_supabase_transport,
+    timeout=httpx.Timeout(60.0, connect=10.0),
+)
+_supabase_options = ClientOptions(
+    httpx_client=_supabase_httpx_client,
+    postgrest_client_timeout=60,
+)
+
 supabase: Client = create_client(
     SUPABASE_URL,
     SUPABASE_SECRET_KEY,
+    options=_supabase_options,
 )
 
 
@@ -448,6 +496,8 @@ def predict_row(row: pd.Series) -> dict:
         "original_completion": nullable_text(row, "original_completion"),
         "revised_completion": nullable_text(row, "revised_completion"),
         "anticipated_completion": nullable_text(row, "anticipated_completion"),
+        "source_report": nullable_text(row, "source_report"),
+        "source_page": int(row["source_page"]) if "source_page" in row and pd.notna(row["source_page"]) else None,
     }
 
 
@@ -1478,95 +1528,71 @@ def approve_ingestion(ingestion_run_id: int):
 
         print("===================================\n")
 
-        # 5. Run Agent 2 project by project.
+        # 5. Run Agent 2 using vectorized in-memory batch inference.
         predictions = []
         failed_projects = []
 
-        for project_id in approved_ids:
-            history_df = project_history[
-                project_history["project_id"] == project_id
-            ].copy()
+        try:
+            sorted_history = project_history.sort_values(
+                ["project_id", "report_month"]
+            ).reset_index(drop=True)
 
-            if history_df.empty:
-                failed_projects.append({
-                    "project_id": project_id,
-                    "error": "No project history returned.",
-                })
-                continue
+            all_features = ml_agent.build_features(sorted_history)
+            all_predictions = ml_agent.predict(all_features)
 
-            history_df = (
-                history_df
-                .sort_values("report_month")
-                .reset_index(drop=True)
+            all_predictions["report_month_dt"] = pd.to_datetime(
+                all_predictions["report_month"], errors="coerce"
             )
 
-            try:
-                agent_result = ml_agent.run_from_history(
-                    history_df
-                )
+            latest_by_project = (
+                all_predictions
+                .sort_values(["project_id", "report_month_dt"])
+                .groupby("project_id")
+                .last()
+                .reset_index()
+            )
 
-                feature_predictions = agent_result.get(
-                    "predictions"
-                )
+            latest_dict = {
+                str(row["project_id"]).strip(): row
+                for _, row in latest_by_project.iterrows()
+            }
 
-                if feature_predictions is None:
-                    raise RuntimeError(
-                        "Agent 2 returned no predictions dataframe."
-                    )
+            for project_id in approved_ids:
+                if project_id not in latest_dict:
+                    failed_projects.append({
+                        "project_id": project_id,
+                        "error": "No project history returned.",
+                    })
+                    continue
 
-                if feature_predictions.empty:
-                    raise RuntimeError(
-                        "Agent 2 returned zero prediction rows."
-                    )
-
-                latest_prediction = (
-                    feature_predictions
-                    .sort_values("report_month")
-                    .iloc[-1]
-                )
+                latest_prediction = latest_dict[project_id]
 
                 probability = float(
-                    latest_prediction[
-                        "model_delay_probability"
-                    ]
+                    latest_prediction["model_delay_probability"]
                 )
 
                 score = float(
-                    latest_prediction[
-                        "risk_score_100"
-                    ]
+                    latest_prediction["risk_score_100"]
                 )
 
                 level = str(
                     latest_prediction["risk_level"]
                 )
 
-                # Existing PAIMANA explanation logic.
+                # Compute rule-based risk drivers directly without redundant ML re-inference
                 try:
-                    explanation = predict_row(
-                        latest_prediction
+                    risk_drivers = drivers(latest_prediction)
+                    interpretation = (
+                        "Model-estimated probability of next-month "
+                        "additional delay; drivers are rule-based "
+                        "warning flags, not causal explanations."
                     )
-
-                    risk_drivers = explanation.get(
-                        "top_risk_drivers",
-                        [],
-                    )
-
-                    interpretation = explanation.get(
-                        "interpretation"
-                    )
-
                 except Exception:
                     risk_drivers = [
-                        (
-                            "Model-estimated risk based on "
-                            "current project features"
-                        )
+                        "Model-estimated risk based on current project features"
                     ]
-
                     interpretation = (
-                        "Model-estimated probability of "
-                        "next-month additional delay."
+                        "Model-estimated probability of next-month additional delay."
                     )
 
                 if isinstance(risk_drivers, str):
@@ -1595,11 +1621,10 @@ def approve_ingestion(ingestion_run_id: int):
                     ),
                 })
 
-            except Exception as project_error:
-                failed_projects.append({
-                    "project_id": project_id,
-                    "error": str(project_error),
-                })
+        except Exception as batch_error:
+            raise RuntimeError(
+                f"Agent 2 batch prediction failed: {str(batch_error)}"
+            )
 
         # 6. Never leave a partially predicted approval.
         prediction_project_ids = {
